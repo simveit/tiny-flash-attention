@@ -1,8 +1,10 @@
-FROM nvcr.io/nvidia/cuda:12.0.0-devel-ubuntu22.04
+FROM nvcr.io/nvidia/cuda:12.6.3-devel-ubuntu22.04
 
 ARG CMAKE_VERSION=3.30.5
 ARG GOOGLETEST_VERSION=1.15.2
-ARG NUM_JOBS=8
+ARG NUM_JOBS=4
+ARG HOST_UID=1000
+ARG HOST_GID=1000
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -22,11 +24,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-setuptools \
         wget \
-        git && \
+        git \
+        zsh \
+        curl && \
     apt-get clean
 
 # System locale
-# Important for UTF-8
 ENV LC_ALL=en_US.UTF-8
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US.UTF-8
@@ -49,8 +52,7 @@ RUN cd /tmp && \
     make install && \
     rm -rf /tmp/*
 
-# Install QT6 and its dependencies for Nsight Compute GUI
-# https://leimao.github.io/blog/Docker-Nsight-Compute/
+# Install QT6 and dependencies
 RUN apt-get update -y && \
     apt-get install -y --no-install-recommends \
         apt-transport-https \
@@ -83,17 +85,43 @@ RUN apt-get update -y && \
         qt6-base-dev && \
     apt-get clean
 
+# Python setup
 RUN cd /usr/local/bin && \
     ln -s /usr/bin/python3 python && \
     ln -s /usr/bin/pip3 pip && \
     pip install --upgrade pip setuptools wheel
 
-# Install packaging and ninja required for flash-attention
+# Install build dependencies
 RUN pip install packaging ninja numpy
 
-# Install PyTorch with CUDA 12.1 support (compatible with CUDA 12.6 runtime)
+# Install PyTorch
 RUN pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# Install flash-attention with controlled parallelism to avoid OOM issues
+# Install flash-attention
 ENV MAX_JOBS=4
 RUN pip install flash-attn --no-build-isolation
+
+# Install oh-my-zsh for root
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
+
+# Create non-root user
+RUN groupadd -g ${HOST_GID} devuser && \
+    useradd -m -u ${HOST_UID} -g ${HOST_GID} -s /bin/zsh devuser
+
+# Configure sudo
+RUN apt-get update && apt-get install -y sudo && \
+    echo "devuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/devuser && \
+    apt-get clean
+
+# Copy oh-my-zsh config to devuser
+RUN cp -R /root/.oh-my-zsh /home/devuser/.oh-my-zsh && \
+    cp /root/.zshrc /home/devuser/.zshrc && \
+    sed -i 's|/root/.oh-my-zsh|/home/devuser/.oh-my-zsh|g' /home/devuser/.zshrc && \
+    chown -R devuser:devuser /home/devuser
+
+# Set workspace
+RUN mkdir -p /workspace && chown devuser:devuser /workspace
+WORKDIR /workspace
+
+# Switch to devuser
+USER devuser
